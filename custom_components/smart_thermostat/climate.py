@@ -978,15 +978,20 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
         for heater_or_cooler_entity in self.heater_or_cooler_entity:
             state = self.hass.states.get(heater_or_cooler_entity)
             if not state or state.state in ("on", "unavailable", "unknown"):
-                _LOGGER.debug("%s: Skipping ON for %s (state=%s)",
-                              self.entity_id, heater_or_cooler_entity,
-                              state.state if state else "missing")
                 continue
-    
+        
+            domain = heater_or_cooler_entity.split(".")[0]
             data = {ATTR_ENTITY_ID: heater_or_cooler_entity}
-            service = SERVICE_TURN_OFF if self._heater_polarity_invert else SERVICE_TURN_ON
-            _LOGGER.debug("%s: Sending %s to %s", self.entity_id, service, heater_or_cooler_entity)
-            await self.hass.services.async_call(HA_DOMAIN, service, data)
+        
+            if domain == "climate":
+                _LOGGER.debug("%s: Setting HVAC mode to heat for %s",
+                              self.entity_id, heater_or_cooler_entity)
+                await self.hass.services.async_call(
+                    "climate", "set_hvac_mode", {**data, "hvac_mode": "heat"}
+                )
+            else:
+                service = SERVICE_TURN_OFF if self._heater_polarity_invert else SERVICE_TURN_ON
+                await self.hass.services.async_call(domain, service, data)
 
     async def _async_heater_turn_off(self, force=False):
         """Turn heater toggleable device off, only if needed."""
@@ -1005,15 +1010,20 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
         for heater_or_cooler_entity in self.heater_or_cooler_entity:
             state = self.hass.states.get(heater_or_cooler_entity)
             if not state or state.state in ("off", "unavailable", "unknown"):
-                _LOGGER.debug("%s: Skipping OFF for %s (state=%s)",
-                              self.entity_id, heater_or_cooler_entity,
-                              state.state if state else "missing")
                 continue
-    
+        
+            domain = heater_or_cooler_entity.split(".")[0]
             data = {ATTR_ENTITY_ID: heater_or_cooler_entity}
-            service = SERVICE_TURN_ON if self._heater_polarity_invert else SERVICE_TURN_OFF
-            _LOGGER.debug("%s: Sending %s to %s", self.entity_id, service, heater_or_cooler_entity)
-            await self.hass.services.async_call(HA_DOMAIN, service, data)
+        
+            if domain == "climate":
+                _LOGGER.debug("%s: Setting HVAC mode to off for %s",
+                              self.entity_id, heater_or_cooler_entity)
+                await self.hass.services.async_call(
+                    "climate", "set_hvac_mode", {**data, "hvac_mode": "off"}
+                )
+            else:
+                service = SERVICE_TURN_ON if self._heater_polarity_invert else SERVICE_TURN_OFF
+                await self.hass.services.async_call(domain, service, data)
 
     async def _async_set_valve_value(self, value: float):
         _LOGGER.info("%s: Change state of %s to %s", self.entity_id,
