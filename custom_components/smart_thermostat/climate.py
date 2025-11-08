@@ -978,21 +978,31 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
         for heater_or_cooler_entity in self.heater_or_cooler_entity:
             state = self.hass.states.get(heater_or_cooler_entity)
             if not state or state.state in ("on", "unavailable", "unknown"):
+                _LOGGER.debug("%s: Skipping ON for %s (state=%s)",
+                              self.entity_id, heater_or_cooler_entity,
+                              state.state if state else "missing")
                 continue
-        
+    
             domain = heater_or_cooler_entity.split(".")[0]
             data = {ATTR_ENTITY_ID: heater_or_cooler_entity}
-        
+    
             if domain == "climate":
                 _LOGGER.debug("%s: Setting HVAC mode to heat for %s",
                               self.entity_id, heater_or_cooler_entity)
-                await self.hass.services.async_call(
-                    "climate", "set_hvac_mode", {**data, "hvac_mode": "heat"}
+                self.hass.async_create_task(
+                    self.hass.services.async_call(
+                        "climate", "set_hvac_mode", {**data, "hvac_mode": "heat"}
+                    )
                 )
             else:
                 service = SERVICE_TURN_OFF if self._heater_polarity_invert else SERVICE_TURN_ON
-                await self.hass.services.async_call(domain, service, data)
-
+                _LOGGER.debug("%s: Sending %s to %s",
+                              self.entity_id, service, heater_or_cooler_entity)
+                self.hass.async_create_task(
+                    self.hass.services.async_call(domain, service, data)
+                )
+    
+    
     async def _async_heater_turn_off(self, force=False):
         """Turn heater toggleable device off, only if needed."""
         if not self._is_device_active:
@@ -1010,20 +1020,29 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
         for heater_or_cooler_entity in self.heater_or_cooler_entity:
             state = self.hass.states.get(heater_or_cooler_entity)
             if not state or state.state in ("off", "unavailable", "unknown"):
+                _LOGGER.debug("%s: Skipping OFF for %s (state=%s)",
+                              self.entity_id, heater_or_cooler_entity,
+                              state.state if state else "missing")
                 continue
-        
+    
             domain = heater_or_cooler_entity.split(".")[0]
             data = {ATTR_ENTITY_ID: heater_or_cooler_entity}
-        
+    
             if domain == "climate":
                 _LOGGER.debug("%s: Setting HVAC mode to off for %s",
                               self.entity_id, heater_or_cooler_entity)
-                await self.hass.services.async_call(
-                    "climate", "set_hvac_mode", {**data, "hvac_mode": "off"}
+                self.hass.async_create_task(
+                    self.hass.services.async_call(
+                        "climate", "set_hvac_mode", {**data, "hvac_mode": "off"}
+                    )
                 )
             else:
                 service = SERVICE_TURN_ON if self._heater_polarity_invert else SERVICE_TURN_OFF
-                await self.hass.services.async_call(domain, service, data)
+                _LOGGER.debug("%s: Sending %s to %s",
+                              self.entity_id, service, heater_or_cooler_entity)
+                self.hass.async_create_task(
+                    self.hass.services.async_call(domain, service, data)
+                )
 
     async def _async_set_valve_value(self, value: float):
         _LOGGER.info("%s: Change state of %s to %s", self.entity_id,
@@ -1176,7 +1195,7 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
             if state.state in ("off", "unavailable", "unknown"):
                 return False
             supported_features = state.attributes.get("supported_features", 0)
-            return supported_features & 1
+            return supported_features & 1  # supports turn_off
     
         async def can_turn_on(entity_id):
             state = self.hass.states.get(entity_id)
@@ -1185,45 +1204,55 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
             if state.state in ("on", "unavailable", "unknown"):
                 return False
             supported_features = state.attributes.get("supported_features", 0)
-            return supported_features & 1
+            return supported_features & 1  # supports turn_on
     
+        # Heater is currently ON
         if self._is_device_active:
             if time_on <= time_passed or self._force_off:
-                _LOGGER.info("%s: ON time passed. Request turning OFF %s",
-                             self.entity_id,
-                             ", ".join([entity for entity in self.heater_or_cooler_entity]))
+                _LOGGER.info(
+                    "%s: ON time passed. Request turning OFF %s",
+                    self.entity_id,
+                    ", ".join(self.heater_or_cooler_entity)
+                )
                 for entity in self.heater_or_cooler_entity:
                     if await can_turn_off(entity):
-                        await self._async_heater_turn_off(entity)
+                        self.hass.async_create_task(self._async_heater_turn_off())
                 self._time_changed = time.time()
             else:
-                _LOGGER.info("%s: Time until %s turns OFF: %s sec",
-                             self.entity_id,
-                             ", ".join([entity for entity in self.heater_or_cooler_entity]),
-                             int(time_on - time_passed))
+                _LOGGER.info(
+                    "%s: Time until %s turns OFF: %s sec",
+                    self.entity_id,
+                    ", ".join(self.heater_or_cooler_entity),
+                    int(time_on - time_passed)
+                )
                 if self._keep_alive:
                     for entity in self.heater_or_cooler_entity:
                         if await can_turn_on(entity):
-                            await self._async_heater_turn_on(entity)
+                            self.hass.async_create_task(self._async_heater_turn_on())
+    
+        # Heater is currently OFF
         else:
             if time_off <= time_passed or self._force_on:
-                _LOGGER.info("%s: OFF time passed. Request turning ON %s",
-                             self.entity_id,
-                             ", ".join([entity for entity in self.heater_or_cooler_entity]))
+                _LOGGER.info(
+                    "%s: OFF time passed. Request turning ON %s",
+                    self.entity_id,
+                    ", ".join(self.heater_or_cooler_entity)
+                )
                 for entity in self.heater_or_cooler_entity:
                     if await can_turn_on(entity):
-                        await self._async_heater_turn_on(entity)
+                        self.hass.async_create_task(self._async_heater_turn_on())
                 self._time_changed = time.time()
             else:
-                _LOGGER.info("%s: Time until %s turns ON: %s sec",
-                             self.entity_id,
-                             ", ".join([entity for entity in self.heater_or_cooler_entity]),
-                             int(time_off - time_passed))
+                _LOGGER.info(
+                    "%s: Time until %s turns ON: %s sec",
+                    self.entity_id,
+                    ", ".join(self.heater_or_cooler_entity),
+                    int(time_off - time_passed)
+                )
                 if self._keep_alive:
                     for entity in self.heater_or_cooler_entity:
                         if await can_turn_off(entity):
-                            await self._async_heater_turn_off(entity)
+                            self.hass.async_create_task(self._async_heater_turn_off())
     
         self._force_on = False
-        self._force_off = False
-    
+        self._force_off = False    
